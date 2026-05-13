@@ -24,6 +24,7 @@ HISTORY_HEADERS = [
     "transcript JSON path",
     "job_id",
 ]
+EMPTY_HISTORY_ROW = [["", "", None, "", "", "", "", ""]]
 
 
 def configure_logging() -> None:
@@ -73,12 +74,16 @@ def transcribe_ui(
 
 
 def refresh_history_tab():
-    entries = load_history_entries(settings.data_dir, settings.final_transcripts_dir, limit=50)
+    try:
+        entries = load_history_entries(settings.data_dir, settings.final_transcripts_dir, limit=50)
+    except Exception:
+        logging.exception("Failed to load history")
+        entries = []
     job_ids = [entry["job_id"] for entry in entries if entry.get("job_id")]
     selected_job_id = job_ids[0] if job_ids else None
     final_path, json_path = history_downloads_for_job(selected_job_id)
     return (
-        history_rows(entries),
+        history_table_value(entries),
         gr.update(choices=job_ids, value=selected_job_id),
         final_path,
         json_path,
@@ -88,7 +93,11 @@ def refresh_history_tab():
 def history_downloads_for_job(job_id: str | None):
     if not job_id:
         return None, None
-    entries = load_history_entries(settings.data_dir, settings.final_transcripts_dir, limit=None)
+    try:
+        entries = load_history_entries(settings.data_dir, settings.final_transcripts_dir, limit=None)
+    except Exception:
+        logging.exception("Failed to load history downloads")
+        return None, None
     for entry in entries:
         if entry.get("job_id") == job_id:
             return _existing_file(entry.get("final_markdown_path")), _existing_file(entry.get("json_path"))
@@ -97,6 +106,11 @@ def history_downloads_for_job(job_id: str | None):
 
 def refresh_diagnostics_tab():
     return diagnostics_snapshot(settings)
+
+
+def history_table_value(entries):
+    rows = history_rows(entries)
+    return rows if rows else EMPTY_HISTORY_ROW
 
 
 def _existing_file(value: object) -> str | None:
@@ -155,12 +169,14 @@ def build_demo() -> gr.Blocks:
                         raw_md = gr.File(label="raw_merged_transcript.md")
                         chunks_zip = gr.File(label="chunks.zip")
 
-        with gr.Tab("History"):
+        with gr.Tab("History") as history_tab:
             gr.Markdown("Recent completed and failed jobs from `data/history/index.json` and existing transcript artifacts.")
             history_refresh = gr.Button("Refresh history", variant="secondary")
             history_table = gr.Dataframe(
                 headers=HISTORY_HEADERS,
-                value=[],
+                value=EMPTY_HISTORY_ROW,
+                datatype=["str", "str", "number", "str", "str", "str", "str", "str"],
+                col_count=(len(HISTORY_HEADERS), "fixed"),
                 interactive=False,
                 wrap=True,
             )
@@ -184,6 +200,10 @@ def build_demo() -> gr.Blocks:
         )
         use_current_time.click(fn=current_journal_datetime, outputs=journal_datetime)
         demo.load(fn=current_journal_datetime, outputs=journal_datetime)
+        history_tab.select(
+            fn=refresh_history_tab,
+            outputs=[history_table, history_job, history_final_md, history_json],
+        )
         history_refresh.click(
             fn=refresh_history_tab,
             outputs=[history_table, history_job, history_final_md, history_json],
