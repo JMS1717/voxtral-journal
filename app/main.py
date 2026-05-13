@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 
 import gradio as gr
@@ -100,7 +101,10 @@ def history_downloads_for_job(job_id: str | None):
         return None, None
     for entry in entries:
         if entry.get("job_id") == job_id:
-            return _existing_file(entry.get("final_markdown_path")), _existing_file(entry.get("json_path"))
+            return (
+                _history_artifact_file(entry, "final_markdown_path", "final_journal_transcript.md"),
+                _history_artifact_file(entry, "json_path", "transcript.json"),
+            )
     return None, None
 
 
@@ -113,11 +117,30 @@ def history_table_value(entries):
     return rows if rows else EMPTY_HISTORY_ROW
 
 
+def _history_artifact_file(entry: dict, key: str, filename: str) -> str | None:
+    job_id = entry.get("job_id")
+    if job_id:
+        runtime_path = settings.final_transcripts_dir / str(job_id) / filename
+        if runtime_path.exists():
+            return str(runtime_path)
+    return _existing_file(entry.get(key))
+
+
 def _existing_file(value: object) -> str | None:
     if not value:
         return None
     path = Path(str(value))
-    return str(path) if path.exists() else None
+    if not path.exists():
+        return None
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return None
+    allowed_roots = [settings.project_root.resolve(), Path(tempfile.gettempdir()).resolve()]
+    if any(resolved.is_relative_to(root) for root in allowed_roots):
+        return str(resolved)
+    logging.warning("Ignoring history file outside Gradio allowed paths: %s", resolved)
+    return None
 
 
 def build_demo() -> gr.Blocks:
