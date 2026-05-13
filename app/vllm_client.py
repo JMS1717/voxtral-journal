@@ -123,7 +123,7 @@ class VoxtralVLLMClient:
         except Exception as exc:
             raise VLLMClientError(f"Voxtral audio chat failed for {audio_path.name}: {exc}") from exc
 
-    def chat_text(self, prompt: str, max_tokens: int = 8192) -> str:
+    def chat_text(self, prompt: str, max_tokens: int = 4096) -> str:
         try:
             response = self.client.chat.completions.create(
                 model=self.resolve_model(),

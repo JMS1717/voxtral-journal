@@ -25,6 +25,14 @@ def test_output_writer_creates_download_artifacts(tmp_path):
     assert artifacts.raw_merged_markdown.read_text(encoding="utf-8").strip() == "raw text"
     payload = json.loads(artifacts.transcript_json.read_text(encoding="utf-8"))
     assert payload["metadata"]["mode"] == "test"
+    assert payload["chunks"] == [
+        {
+            "index": 1,
+            "chunk_path": str(chunk),
+            "status": "completed",
+            "transcript_path": str(chunk_transcript),
+            "error": None,
+        }
+    ]
     assert artifacts.chunks_zip is not None
     assert artifacts.chunks_zip.exists()
-

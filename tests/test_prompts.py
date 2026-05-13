@@ -2,6 +2,7 @@ from app.prompts import (
     JOURNAL_TRANSCRIPTION_SYSTEM_PROMPT,
     current_journal_datetime,
     build_full_file_audio_prompt,
+    build_polish_from_cleaned_segments_prompt,
     build_polish_from_merged_prompt,
 )
 
@@ -39,3 +40,13 @@ def test_polish_prompt_includes_merged_transcript():
     prompt = build_polish_from_merged_prompt("hello world", "date", "en")
     assert "hello world" in prompt
     assert "Merged raw transcript" in prompt
+
+
+def test_cleaned_segments_prompt_preserves_journal_datetime():
+    prompt = build_polish_from_cleaned_segments_prompt(
+        "cleaned segment",
+        "Wednesday, May 13, 2026 4:32 PM",
+        "en",
+    )
+    assert "Wednesday, May 13, 2026 4:32 PM" in prompt
+    assert "cleaned segment" in prompt

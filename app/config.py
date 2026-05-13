@@ -67,6 +67,11 @@ try:
         gradio_port: int = 7860
         request_timeout_seconds: int = 1800
         connect_timeout_seconds: int = 30
+        vllm_context_window: int = 8192
+        cleanup_max_output_tokens: int = 4096
+        cleanup_token_safety_margin: int = 512
+        cleanup_min_output_tokens: int = 512
+        long_transcript_chunk_tokens: int = 2500
         default_language: str = "en"
         default_chunk_seconds: int = 300
         default_overlap_seconds: int = 30
@@ -102,6 +107,11 @@ except Exception:
             self.gradio_port = int(os.getenv("GRADIO_PORT", "7860"))
             self.request_timeout_seconds = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "1800"))
             self.connect_timeout_seconds = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "30"))
+            self.vllm_context_window = int(os.getenv("VLLM_CONTEXT_WINDOW", "8192"))
+            self.cleanup_max_output_tokens = int(os.getenv("CLEANUP_MAX_OUTPUT_TOKENS", "4096"))
+            self.cleanup_token_safety_margin = int(os.getenv("CLEANUP_TOKEN_SAFETY_MARGIN", "512"))
+            self.cleanup_min_output_tokens = int(os.getenv("CLEANUP_MIN_OUTPUT_TOKENS", "512"))
+            self.long_transcript_chunk_tokens = int(os.getenv("LONG_TRANSCRIPT_CHUNK_TOKENS", "2500"))
             self.default_language = os.getenv("DEFAULT_LANGUAGE", "en")
             self.default_chunk_seconds = int(os.getenv("DEFAULT_CHUNK_SECONDS", "300"))
             self.default_overlap_seconds = int(os.getenv("DEFAULT_OVERLAP_SECONDS", "30"))

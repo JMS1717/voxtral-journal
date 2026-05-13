@@ -1,3 +1,8 @@
+param(
+    [ValidateSet("safe", "balanced", "high-context")]
+    [string]$Profile = "safe"
+)
+
 $ErrorActionPreference = "Stop"
 
 function Write-Status {
@@ -131,11 +136,81 @@ function ConvertTo-WindowsPathFromWsl {
     return ($result.Output | Select-Object -First 1).ToString().Trim()
 }
 
+function Get-VllmProfileConfig {
+    param([string]$ProfileName)
+
+    switch ($ProfileName) {
+        "safe" {
+            return [pscustomobject]@{
+                Name = "safe"
+                MaxModelLen = 8192
+                GpuMemoryUtilization = "0.90"
+                MaxNumSeqs = "1"
+                EnforceEager = "true"
+                ExtraArgs = ""
+                Summary = "safe 8192 profile with enforce eager and 0.90 GPU memory utilization"
+            }
+        }
+        "balanced" {
+            return [pscustomobject]@{
+                Name = "balanced"
+                MaxModelLen = 8192
+                GpuMemoryUtilization = "0.90"
+                MaxNumSeqs = "1"
+                EnforceEager = "false"
+                ExtraArgs = ""
+                Summary = "balanced 8192 profile"
+            }
+        }
+        "high-context" {
+            return [pscustomobject]@{
+                Name = "high-context"
+                MaxModelLen = 16384
+                GpuMemoryUtilization = "0.90"
+                MaxNumSeqs = "1"
+                EnforceEager = "false"
+                ExtraArgs = ""
+                Summary = "high-context 16384 profile with 0.90 GPU memory utilization"
+            }
+        }
+        default {
+            throw "Unknown profile: $ProfileName"
+        }
+    }
+}
+
+function Get-VllmMemoryFailureMessage {
+    param([object[]]$Lines)
+
+    $joined = ($Lines | ForEach-Object { "$_" }) -join "`n"
+    if ($joined -match "No available memory for the cache blocks|Available KV cache memory") {
+        return "Your GPU does not have enough free VRAM for this profile. Close GPU apps or use the safe 8192 profile."
+    }
+
+    return $null
+}
+
+function Test-VllmExtraArgs {
+    param([string]$ExtraArgs)
+
+    if ($ExtraArgs -match "(^|\s)--(gpu-memory-utilization|max-model-len|max-num-seqs|enforce-eager)(\s|=|$)") {
+        throw "VLLM_EXTRA_ARGS contains a core vLLM flag. Use the dedicated VLLM_* profile fields instead."
+    }
+}
+
+function ConvertTo-WslSingleQuoted {
+    param([string]$Value)
+    return "'" + ($Value -replace "'", "'\''") + "'"
+}
+
 try {
+    $profileConfig = Get-VllmProfileConfig -ProfileName $Profile
+    Test-VllmExtraArgs -ExtraArgs $profileConfig.ExtraArgs
     $scriptDir = Split-Path -Parent $PSCommandPath
     $repoRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
 
-    Write-Host "Voxtral journal one-click start"
+    Write-Host "Voxtral Journal Windows one-click start"
+    Write-Host "Profile: $($profileConfig.Name) ($($profileConfig.Summary))"
     Write-Host "Windows source path: $repoRoot"
 
     Write-Host "Checking WSL installation."
@@ -191,21 +266,41 @@ try {
     }
 
     Write-Status "Stopping stale vLLM and Gradio processes."
-    Invoke-WslNoFail -Arguments @("pkill", "-f", "vllm serve")
-    Invoke-WslNoFail -Arguments @("pkill", "-f", "mistralai/Voxtral-Mini-3B-2507")
-    Invoke-WslNoFail -Arguments @("pkill", "-f", "python -m app.main")
-    Start-Sleep -Seconds 3
+    $stopScript = Join-Path $scriptDir "windows_stop_stack.ps1"
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $stopScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to stop stale vLLM or Gradio processes."
+    }
 
-    Write-Status "Starting vLLM from WSL runtime copy with VLLM_MAX_MODEL_LEN=16384."
+    Write-Status "Starting vLLM from WSL runtime copy with profile $($profileConfig.Name)."
+    Write-Status "Effective VLLM_MAX_MODEL_LEN=$($profileConfig.MaxModelLen)"
+    Write-Status "Effective VLLM_GPU_MEMORY_UTILIZATION=$($profileConfig.GpuMemoryUtilization)"
+    Write-Status "Effective VLLM_MAX_NUM_SEQS=$($profileConfig.MaxNumSeqs)"
+    Write-Status "Effective VLLM_ENFORCE_EAGER=$($profileConfig.EnforceEager)"
+    Write-Status "Effective VLLM_EXTRA_ARGS=$($profileConfig.ExtraArgs)"
+    Write-Status "Final vLLM command line: vllm serve mistralai/Voxtral-Mini-3B-2507 --host 0.0.0.0 --port 8000 --tokenizer_mode mistral --config_format mistral --load_format mistral --max-model-len $($profileConfig.MaxModelLen) --gpu-memory-utilization $($profileConfig.GpuMemoryUtilization) --max-num-seqs $($profileConfig.MaxNumSeqs)$(@{true=' --enforce-eager'; false=''}[$profileConfig.EnforceEager])"
     $vllmProcess = Start-Process -FilePath "wsl.exe" `
-        -ArgumentList @("env", "VLLM_MAX_MODEL_LEN=16384", "bash", "$wslRepo/scripts/run_vllm_logged.sh") `
+        -ArgumentList @(
+            "env",
+            "VLLM_MAX_MODEL_LEN=$($profileConfig.MaxModelLen)",
+            "VLLM_GPU_MEMORY_UTILIZATION=$($profileConfig.GpuMemoryUtilization)",
+            "VLLM_MAX_NUM_SEQS=$($profileConfig.MaxNumSeqs)",
+            "VLLM_ENFORCE_EAGER=$($profileConfig.EnforceEager)",
+            "VLLM_EXTRA_ARGS=$($profileConfig.ExtraArgs)",
+            "bash",
+            "$wslRepo/scripts/run_vllm_logged.sh"
+        ) `
         -WindowStyle Hidden `
         -PassThru
     Write-Status "vLLM launcher process started. Windows PID: $($vllmProcess.Id)"
 
-    if (-not (Wait-HttpOk -Name "vLLM" -Url "http://localhost:8000/v1/models" -TimeoutSeconds 1800 -StatusEverySeconds 25)) {
+    if (-not (Wait-HttpOk -Name "vLLM" -Url "http://localhost:8000/v1/models" -TimeoutSeconds 180 -StatusEverySeconds 25)) {
         $tail = Get-WslTail -WslRepo $wslRepo -LogPath "data/logs/vllm.log" -Lines 120
         Add-LogBlock "vLLM failed to become ready. Tail of runtime data/logs/vllm.log:" $tail
+        $memoryFailureMessage = Get-VllmMemoryFailureMessage -Lines $tail
+        if ($memoryFailureMessage) {
+            Write-Status $memoryFailureMessage
+        }
         throw "vLLM did not become ready. Check CUDA/GPU availability, Hugging Face model access, and $wslRepo/data/logs/vllm.log."
     }
 

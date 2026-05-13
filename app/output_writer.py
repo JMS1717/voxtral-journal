@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from app.history import upsert_history_entry
 
 
 @dataclass
@@ -58,15 +60,19 @@ class OutputWriter:
 
         final_markdown.write_text(final_text.strip() + "\n", encoding="utf-8")
         raw_merged_markdown.write_text(raw_merged_text.strip() + "\n", encoding="utf-8")
+        created_at = datetime.now().isoformat(timespec="seconds")
+        chunk_statuses = _chunk_statuses(chunk_audio_files, chunk_transcripts)
 
         payload = {
             "metadata": {
                 **metadata,
-                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "created_at": created_at,
                 "normalized_wav": str(normalized_wav),
                 "chunk_audio_files": [str(path) for path in chunk_audio_files],
                 "chunk_transcripts": [str(path) for path in chunk_transcripts],
+                "status": "completed",
             },
+            "chunks": chunk_statuses,
             "raw_merged_transcript": raw_merged_text,
             "final_journal_transcript": final_text,
         }
@@ -78,6 +84,23 @@ class OutputWriter:
                     zf.write(path, arcname=f"audio/{path.name}")
                 for path in chunk_transcripts:
                     zf.write(path, arcname=f"transcripts/{path.name}")
+
+        upsert_history_entry(
+            self.final_dir.parent,
+            {
+                "job_id": session_id,
+                "created_at": created_at,
+                "source_filename": Path(str(metadata.get("source_file") or "")).name,
+                "audio_duration_seconds": metadata.get("audio_duration_seconds"),
+                "mode": metadata.get("mode"),
+                "status": "completed",
+                "final_markdown_path": str(final_markdown),
+                "json_path": str(transcript_json),
+                "raw_merged_path": str(raw_merged_markdown),
+                "chunks_zip_path": str(chunks_zip) if chunks_zip else None,
+                "error": None,
+            },
+        )
 
         return TranscriptArtifacts(
             session_id=session_id,
@@ -101,3 +124,20 @@ def artifact_paths_for_gradio(artifacts: TranscriptArtifacts) -> tuple[str, str,
         str(artifacts.chunks_zip) if artifacts.chunks_zip else None,
     )
 
+
+def _chunk_statuses(chunk_audio_files: list[Path], chunk_transcripts: list[Path]) -> list[dict[str, Any]]:
+    count = max(len(chunk_audio_files), len(chunk_transcripts))
+    statuses: list[dict[str, Any]] = []
+    for index in range(count):
+        chunk_path = chunk_audio_files[index] if index < len(chunk_audio_files) else None
+        transcript_path = chunk_transcripts[index] if index < len(chunk_transcripts) else None
+        statuses.append(
+            {
+                "index": index + 1,
+                "chunk_path": str(chunk_path) if chunk_path else None,
+                "status": "completed" if transcript_path else "pending",
+                "transcript_path": str(transcript_path) if transcript_path else None,
+                "error": None,
+            }
+        )
+    return statuses

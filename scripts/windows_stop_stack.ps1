@@ -6,16 +6,6 @@ function Write-Status {
     Write-Host "[$timestamp] $Message"
 }
 
-function Invoke-WslNoFail {
-    param([string[]]$Arguments)
-    & wsl.exe @Arguments 2>&1 | ForEach-Object {
-        if ($_) {
-            Write-Host $_
-        }
-    }
-    $global:LASTEXITCODE = 0
-}
-
 try {
     $scriptDir = Split-Path -Parent $PSCommandPath
     $repoRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
@@ -30,14 +20,72 @@ try {
     Write-Status "Windows source path: $repoRoot"
     Write-Status "WSL runtime path: $wslRuntime"
 
-    Invoke-WslNoFail -Arguments @("pkill", "-f", "vllm serve")
-    Invoke-WslNoFail -Arguments @("pkill", "-f", "mistralai/Voxtral-Mini-3B-2507")
-    Invoke-WslNoFail -Arguments @("pkill", "-f", "python -m app.main")
-    Invoke-WslNoFail -Arguments @("pkill", "-f", "$wslRuntime/scripts/run_vllm_logged.sh")
-    Invoke-WslNoFail -Arguments @("pkill", "-f", "$wslRuntime/scripts/run_ui_logged.sh")
+    $stopCommand = @'
+set -euo pipefail
 
-    Write-Status "Remaining matching processes, if any:"
-    & wsl.exe bash -lc "pgrep -af 'vllm|Voxtral|mistralai|app.main|run_vllm_logged|run_ui_logged' || true"
+patterns=(
+  "[v]llm serve"
+  "[m]istralai/Voxtral-Mini-3B-2507"
+  "[r]un_vllm_logged"
+  "[p]ython -m app.main"
+  "[r]un_ui_logged"
+)
+
+print_matches() {
+  local found=0
+  for pattern in "${patterns[@]}"; do
+    if pgrep -af "${pattern}" >/tmp/voxtral_stop_matches.txt 2>/dev/null; then
+      found=1
+      cat /tmp/voxtral_stop_matches.txt
+    fi
+  done
+  if [[ "${found}" -eq 1 ]]; then
+    return 0
+  fi
+  return 1
+}
+
+for pattern in "${patterns[@]}"; do
+  pkill -TERM -f "${pattern}" 2>/dev/null || true
+done
+
+for _ in $(seq 1 10); do
+  if ! print_matches >/dev/null; then
+    echo "No matching vLLM or Gradio processes remain."
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "Processes still alive after TERM; sending KILL."
+for pattern in "${patterns[@]}"; do
+  pkill -KILL -f "${pattern}" 2>/dev/null || true
+done
+
+for _ in $(seq 1 10); do
+  if ! print_matches >/dev/null; then
+    echo "No matching vLLM or Gradio processes remain after KILL."
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "WARNING: Matching processes remain after stop attempt:"
+print_matches || true
+exit 1
+'@
+
+    $encodedStopCommand = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($stopCommand))
+    $wslStopLauncher = "printf '%s' '$encodedStopCommand' | base64 -d > /tmp/voxtral_stop_stack.sh && bash /tmp/voxtral_stop_stack.sh"
+    $stopOutput = & wsl.exe @("bash", "-lc", $wslStopLauncher) 2>&1
+    $stopOutput | ForEach-Object {
+        if ($_) {
+            Write-Host $_
+        }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Stop command could not kill all matching processes."
+    }
 
     Write-Status "Stop command finished. Logs and data were not deleted."
     exit 0

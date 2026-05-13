@@ -15,7 +15,7 @@ try {
     $scriptDir = Split-Path -Parent $PSCommandPath
     $repoRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
 
-    Write-Status "Syncing Voxtral journal repo to WSL-native runtime copy."
+    Write-Status "Syncing Voxtral Journal Windows repo to WSL-native runtime copy."
     Write-Status "Windows source path: $repoRoot"
 
     $repoRootForWslPath = $repoRoot -replace "\\", "/"

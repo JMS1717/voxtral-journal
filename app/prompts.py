@@ -63,3 +63,32 @@ Merged raw transcript:
 ---
 {merged_transcript}
 ---"""
+
+
+def build_segment_cleanup_prompt(segment_text: str, segment_index: int, total_segments: int, language: str) -> str:
+    return f"""Clean this raw transcript segment in {language}.
+
+This is segment {segment_index} of {total_segments}. Preserve the speaker's wording, sequence of events, emotional shifts, and any important context needed for the final journal transcript. Remove filler words and obvious false starts. Do not invent details. Do not write the final Date or Subject header.
+
+Raw transcript segment:
+---
+{segment_text}
+---"""
+
+
+def build_polish_from_cleaned_segments_prompt(
+    cleaned_segments: str,
+    journal_datetime: str,
+    language: str,
+) -> str:
+    return f"""{JOURNAL_TRANSCRIPTION_SYSTEM_PROMPT}
+
+Journal date/time to use in the header: {journal_datetime}
+Language hint: {language}
+
+Below are cleaned transcript segments from one longer audio journal. Produce one coherent final polished journal transcript. Preserve the requested date/time, the emotional arc, narrative continuity, and the speaker's wording where possible. Create the Date and Subject header, avoid overusing [tone:] and [sound:] notations, and mark uncertain sections as [inaudible].
+
+Cleaned transcript segments:
+---
+{cleaned_segments}
+---"""
