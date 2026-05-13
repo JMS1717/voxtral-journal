@@ -1,0 +1,9 @@
+NOTICE
+
+Voxtral Journal Windows is an independent wrapper and tooling project.
+
+It does not include Mistral/Voxtral model weights.
+It is not affiliated with Mistral AI, vLLM, Gradio, Hugging Face, or NVIDIA.
+
+Third-party dependencies, model artifacts, and system packages have their own licenses and terms.
+This project is source-available under CC BY-NC 4.0 for non-commercial use only.
