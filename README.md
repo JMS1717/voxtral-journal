@@ -21,6 +21,7 @@ This project is intentionally local-first:
 - The Windows browser opens `http://localhost:7860`.
 - No Mistral/OpenAI/cloud API is required for the core flow.
 - The project does not use `mistralai/Voxtral-Mini-4B-Realtime-2602` and does not implement realtime streaming.
+<img width="2489" height="1409" alt="image" src="https://github.com/user-attachments/assets/8c193624-143f-40ca-9e99-a735530d5b07" />
 
 ## Architecture
 
