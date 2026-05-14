@@ -6,6 +6,7 @@ from app.main import (
     refresh_diagnostics_section,
     refresh_history_tab,
     settings,
+    transcribe_ui,
 )
 
 
@@ -39,7 +40,7 @@ def test_history_text_value_formats_rows():
         ]
     )
 
-    assert "created_at | source filename" in text
+    assert "created_at | file | duration | mode | status | job_id" in text
     assert "2026-05-13T19:00:00 | entry.m4a" in text
     assert "job-1" in text
 
@@ -50,13 +51,14 @@ def test_refresh_history_tab_handles_load_failure(monkeypatch):
 
     monkeypatch.setattr("app.main.load_history_entries", fail_load)
 
-    rows, dropdown_update, final_path, json_path = refresh_history_tab()
+    rows, dropdown_update, final_path, json_path, details = refresh_history_tab()
 
     assert rows == "No history entries found."
     assert dropdown_update["choices"] == []
     assert dropdown_update["value"] is None
     assert final_path is None
     assert json_path is None
+    assert "Select a history job" in details
 
 
 def test_refresh_history_tab_does_not_auto_download_first_job(monkeypatch):
@@ -65,13 +67,14 @@ def test_refresh_history_tab_does_not_auto_download_first_job(monkeypatch):
         lambda *args, **kwargs: [{"job_id": "job-1", "created_at": "2026-05-13T19:00:00"}],
     )
 
-    text, dropdown_update, final_path, json_path = refresh_history_tab()
+    text, dropdown_update, final_path, json_path, details = refresh_history_tab()
 
     assert "job-1" in text
     assert dropdown_update["choices"] == ["job-1"]
     assert dropdown_update["value"] is None
     assert final_path is None
     assert json_path is None
+    assert "Select a history job" in details
 
 
 def test_refresh_diagnostics_section_uses_snapshot(monkeypatch):
@@ -94,7 +97,7 @@ def test_history_downloads_handles_load_failure(monkeypatch):
 
     monkeypatch.setattr("app.main.load_history_entries", fail_load)
 
-    assert history_downloads_for_job("job-1") == (None, None)
+    assert history_downloads_for_job("job-1")[:2] == (None, None)
 
 
 def test_history_downloads_prefers_runtime_artifact_paths(monkeypatch, tmp_path):
@@ -126,4 +129,53 @@ def test_history_downloads_prefers_runtime_artifact_paths(monkeypatch, tmp_path)
         ],
     )
 
-    assert history_downloads_for_job("job-1") == (str(final_md), str(transcript_json))
+    final_path, json_path, details = history_downloads_for_job("job-1")
+
+    assert (final_path, json_path) == (str(final_md), str(transcript_json))
+    assert "Job: job-1" in details
+    assert str(final_md) in details
+
+
+def test_transcribe_ui_processes_multiple_files_sequentially(monkeypatch, tmp_path):
+    first = tmp_path / "first.mp3"
+    second = tmp_path / "second.mp3"
+    first.write_text("a", encoding="utf-8")
+    second.write_text("b", encoding="utf-8")
+    calls = []
+
+    class FakeArtifacts:
+        def __init__(self, session_id: str, final_text: str) -> None:
+            self.session_id = session_id
+            self.final_text = final_text
+            self.final_markdown = tmp_path / f"{session_id}.md"
+            self.transcript_json = tmp_path / f"{session_id}.json"
+            self.raw_merged_markdown = tmp_path / f"{session_id}-raw.md"
+            self.chunks_zip = None
+
+    class FakeTranscriber:
+        def __init__(self, settings):
+            pass
+
+        def process(self, input_path, *args, **kwargs):
+            calls.append(input_path.name)
+            return FakeArtifacts(f"session-{len(calls)}", f"text for {input_path.name}")
+
+    monkeypatch.setattr("app.main.JournalTranscriber", FakeTranscriber)
+
+    final_text, final_md, transcript_json, raw_md, chunks_zip, status = transcribe_ui(
+        [str(first), str(second)],
+        "2026-05-13 20:00",
+        "en",
+        "always chunk",
+        300,
+        30,
+        progress=lambda *args, **kwargs: None,
+    )
+
+    assert calls == ["first.mp3", "second.mp3"]
+    assert final_text == "text for second.mp3"
+    assert final_md.endswith("session-2.md")
+    assert transcript_json.endswith("session-2.json")
+    assert raw_md.endswith("session-2-raw.md")
+    assert chunks_zip is None
+    assert "2 succeeded, 0 failed, 2 total" in status

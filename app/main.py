@@ -8,7 +8,7 @@ import gradio as gr
 
 from app.config import settings
 from app.diagnostics import diagnostics_snapshot
-from app.history import history_rows, load_history_entries
+from app.history import load_history_entries
 from app.output_writer import artifact_paths_for_gradio
 from app.prompts import current_journal_datetime
 from app.token_budget import CleanupContextError
@@ -19,15 +19,14 @@ logger = logging.getLogger(__name__)
 
 HISTORY_HEADERS = [
     "created_at",
-    "source filename",
-    "duration seconds",
-    "processing mode",
+    "file",
+    "duration",
+    "mode",
     "status",
-    "final markdown path",
-    "transcript JSON path",
     "job_id",
 ]
 EMPTY_HISTORY_TEXT = "No history loaded. Click Refresh history."
+EMPTY_HISTORY_DETAILS = "Select a history job to show download details."
 EMPTY_DIAGNOSTICS_TEXT = "No diagnostics loaded. Click Refresh diagnostics."
 
 
@@ -44,7 +43,7 @@ def configure_logging() -> None:
 
 
 def transcribe_ui(
-    audio_file: str,
+    audio_files: str | list[str],
     journal_datetime: str,
     language: str,
     mode_value: str,
@@ -52,29 +51,76 @@ def transcribe_ui(
     overlap_seconds: int,
     progress: gr.Progress = gr.Progress(track_tqdm=False),
 ):
-    if not audio_file:
-        raise gr.Error("Upload an audio file first.")
-    try:
-        mode = ProcessingMode(mode_value)
-        transcriber = JournalTranscriber(settings)
-        artifacts = transcriber.process(
-            Path(audio_file),
-            journal_datetime.strip() or current_journal_datetime(),
-            (language or settings.default_language).strip(),
-            mode,
-            int(chunk_length_seconds),
-            int(overlap_seconds),
-            progress=lambda value, message: progress(value, desc=message),
-        )
-        final_md, transcript_json, raw_md, chunks_zip = artifact_paths_for_gradio(artifacts)
-        status = f"Done. Session: {artifacts.session_id}"
-        return artifacts.final_text, final_md, transcript_json, raw_md, chunks_zip, status
-    except CleanupContextError as exc:
-        logging.exception("Cleanup failed due to context limits")
-        raise gr.Error(str(exc)) from exc
-    except Exception as exc:
-        logging.exception("Transcription failed")
-        raise gr.Error(str(exc)) from exc
+    input_paths = _audio_file_paths(audio_files)
+    if not input_paths:
+        raise gr.Error("Upload one or more audio files first.")
+
+    mode = ProcessingMode(mode_value)
+    transcriber = JournalTranscriber(settings)
+    results: list[tuple[Path, object]] = []
+    failures: list[tuple[Path, str]] = []
+
+    total = len(input_paths)
+    for index, input_path in enumerate(input_paths):
+        file_number = index + 1
+        progress(index / total, desc=f"Starting {file_number}/{total}: {input_path.name}")
+        try:
+            artifacts = transcriber.process(
+                input_path,
+                journal_datetime.strip() or current_journal_datetime(),
+                (language or settings.default_language).strip(),
+                mode,
+                int(chunk_length_seconds),
+                int(overlap_seconds),
+                progress=lambda value, message, idx=index, path=input_path: progress(
+                    (idx + value) / total,
+                    desc=f"{idx + 1}/{total} {path.name}: {message}",
+                ),
+            )
+            results.append((input_path, artifacts))
+        except CleanupContextError as exc:
+            logger.exception("Cleanup failed due to context limits for %s", input_path)
+            failures.append((input_path, str(exc)))
+            if total == 1:
+                raise gr.Error(str(exc)) from exc
+        except Exception as exc:
+            logger.exception("Transcription failed for %s", input_path)
+            failures.append((input_path, str(exc)))
+            if total == 1:
+                raise gr.Error(str(exc)) from exc
+
+    progress(1.0, desc="Batch complete" if total > 1 else "Done")
+    if not results:
+        failure_text = "\n".join(f"- {path.name}: {error}" for path, error in failures)
+        raise gr.Error(f"All files failed.\n{failure_text}")
+
+    latest_input, latest_artifacts = results[-1]
+    final_md, transcript_json, raw_md, chunks_zip = artifact_paths_for_gradio(latest_artifacts)
+    status = _batch_status_text(results, failures, latest_input)
+    return latest_artifacts.final_text, final_md, transcript_json, raw_md, chunks_zip, status
+
+
+def _audio_file_paths(audio_files: str | list[str]) -> list[Path]:
+    if not audio_files:
+        return []
+    if isinstance(audio_files, (str, Path)):
+        return [Path(audio_files)]
+    return [Path(path) for path in audio_files if path]
+
+
+def _batch_status_text(results: list[tuple[Path, object]], failures: list[tuple[Path, str]], latest_input: Path) -> str:
+    total = len(results) + len(failures)
+    lines = [
+        f"Batch complete: {len(results)} succeeded, {len(failures)} failed, {total} total.",
+        f"Download widgets show latest successful job: {latest_input.name}",
+        "",
+    ]
+    for index, (path, artifacts) in enumerate(results, start=1):
+        session_id = getattr(artifacts, "session_id", "")
+        lines.append(f"{index}. completed: {path.name} -> {session_id}")
+    for path, error in failures:
+        lines.append(f"- failed: {path.name} -> {error}")
+    return "\n".join(lines)
 
 
 def refresh_history_tab():
@@ -95,6 +141,7 @@ def refresh_history_tab():
         gr.update(choices=job_ids, value=None),
         None,
         None,
+        EMPTY_HISTORY_DETAILS,
     )
 
 
@@ -102,7 +149,7 @@ def history_downloads_for_job(job_id: str | None):
     logger.info("History download selection changed: job_id=%s", job_id)
     if not job_id:
         logger.info("History download selection cleared")
-        return None, None
+        return None, None, EMPTY_HISTORY_DETAILS
     try:
         entries = load_history_entries(settings.data_dir, settings.final_transcripts_dir, limit=None)
     except Exception:
@@ -115,9 +162,9 @@ def history_downloads_for_job(job_id: str | None):
                 _history_artifact_file(entry, "json_path", "transcript.json"),
             )
             logger.info("History download paths for %s: final=%s json=%s", job_id, paths[0], paths[1])
-            return paths
+            return paths[0], paths[1], _history_details_text(entry, paths[0], paths[1])
     logger.warning("History job id not found for download: %s", job_id)
-    return None, None
+    return None, None, f"History job not found: {job_id}"
 
 
 def refresh_diagnostics_tab():
@@ -141,15 +188,49 @@ def refresh_diagnostics_section():
 
 
 def history_text_value(entries):
-    rows = history_rows(entries)
-    logger.info("History text returning %d rows", len(rows))
-    if not rows:
+    logger.info("History text returning %d rows", len(entries))
+    if not entries:
         return "No history entries found."
     lines = [" | ".join(HISTORY_HEADERS)]
     lines.append(" | ".join("-" * len(header) for header in HISTORY_HEADERS))
-    for row in rows:
-        lines.append(" | ".join(_history_cell_text(value) for value in row))
+    for entry in entries:
+        lines.append(" | ".join(_history_cell_text(value) for value in _compact_history_row(entry)))
     return "\n".join(lines)
+
+
+def _compact_history_row(entry: dict) -> list[object]:
+    return [
+        entry.get("created_at") or "",
+        entry.get("source_filename") or "",
+        _duration_text(entry.get("audio_duration_seconds")),
+        entry.get("mode") or "",
+        entry.get("status") or "",
+        entry.get("job_id") or "",
+    ]
+
+
+def _duration_text(value: object) -> str:
+    if value is None or value == "":
+        return ""
+    try:
+        return f"{float(value):.1f}s"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _history_details_text(entry: dict, final_path: str | None, json_path: str | None) -> str:
+    return "\n".join(
+        [
+            f"Job: {entry.get('job_id') or ''}",
+            f"Created: {entry.get('created_at') or ''}",
+            f"File: {entry.get('source_filename') or ''}",
+            f"Duration: {_duration_text(entry.get('audio_duration_seconds'))}",
+            f"Mode: {entry.get('mode') or ''}",
+            f"Status: {entry.get('status') or ''}",
+            f"Final markdown: {final_path or 'not available'}",
+            f"Transcript JSON: {json_path or 'not available'}",
+        ]
+    )
 
 
 def _history_cell_text(value: object) -> str:
@@ -200,8 +281,9 @@ def build_demo() -> gr.Blocks:
         with gr.Row():
             with gr.Column(scale=1):
                 audio = gr.File(
-                    label="Audio journal file",
+                    label="Audio journal files",
                     file_types=[".mp3", ".wav", ".m4a", ".mp4", ".webm", ".aac", ".flac"],
+                    file_count="multiple",
                     type="filepath",
                 )
                 with gr.Row():
@@ -230,7 +312,7 @@ def build_demo() -> gr.Blocks:
                 run = gr.Button("Transcribe", variant="primary")
             with gr.Column(scale=2):
                 final_text = gr.Textbox(
-                    label="Final polished transcript",
+                    label="Latest final polished transcript",
                     lines=26,
                     max_lines=42,
                 )
@@ -253,6 +335,13 @@ def build_demo() -> gr.Blocks:
             interactive=False,
         )
         history_job = gr.Dropdown(label="Job downloads", choices=[], interactive=True)
+        history_details = gr.Textbox(
+            label="Selected job details",
+            value=EMPTY_HISTORY_DETAILS,
+            lines=8,
+            max_lines=12,
+            interactive=False,
+        )
         with gr.Row():
             history_final_md = gr.File(label="Selected final markdown")
             history_json = gr.File(label="Selected transcript JSON")
@@ -276,12 +365,12 @@ def build_demo() -> gr.Blocks:
         demo.load(fn=current_journal_datetime, outputs=journal_datetime)
         history_refresh.click(
             fn=refresh_history_tab,
-            outputs=[history_table, history_job, history_final_md, history_json],
+            outputs=[history_table, history_job, history_final_md, history_json, history_details],
         )
         history_job.change(
             fn=history_downloads_for_job,
             inputs=history_job,
-            outputs=[history_final_md, history_json],
+            outputs=[history_final_md, history_json, history_details],
         )
         diagnostics_refresh.click(
             fn=refresh_diagnostics_section,
