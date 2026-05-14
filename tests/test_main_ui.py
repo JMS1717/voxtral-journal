@@ -1,9 +1,9 @@
 from app.main import (
-    EMPTY_HISTORY_ROW,
     build_demo,
+    current_journal_datetime,
     history_downloads_for_job,
-    history_table_value,
     history_text_value,
+    refresh_diagnostics_section,
     refresh_history_tab,
     settings,
 )
@@ -14,8 +14,17 @@ def test_gradio_demo_builds():
     assert demo.blocks
 
 
-def test_history_table_value_keeps_empty_dataframe_shape():
-    assert history_table_value([]) == EMPTY_HISTORY_ROW
+def test_main_ui_no_unstable_tab_or_dataframe_components():
+    source = (settings.project_root / "app" / "main.py").read_text(encoding="utf-8")
+
+    assert "gr.Tab(" not in source
+    assert "gr.Tabs(" not in source
+    assert ".select(" not in source
+    assert "gr.Dataframe(" not in source
+
+
+def test_current_journal_datetime_default_available():
+    assert current_journal_datetime()
 
 
 def test_history_text_value_formats_rows():
@@ -63,6 +72,20 @@ def test_refresh_history_tab_does_not_auto_download_first_job(monkeypatch):
     assert dropdown_update["value"] is None
     assert final_path is None
     assert json_path is None
+
+
+def test_refresh_diagnostics_section_uses_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.diagnostics_snapshot",
+        lambda settings: ("OK", "mistralai/Voxtral-Mini-3B-2507", "vllm tail", "gradio tail"),
+    )
+
+    text = refresh_diagnostics_section()
+
+    assert "vLLM health\n\nOK" in text
+    assert "mistralai/Voxtral-Mini-3B-2507" in text
+    assert "vllm tail" in text
+    assert "gradio tail" in text
 
 
 def test_history_downloads_handles_load_failure(monkeypatch):

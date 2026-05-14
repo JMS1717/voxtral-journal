@@ -27,8 +27,8 @@ HISTORY_HEADERS = [
     "transcript JSON path",
     "job_id",
 ]
-EMPTY_HISTORY_ROW = [["", "", None, "", "", "", "", ""]]
 EMPTY_HISTORY_TEXT = "No history loaded. Click Refresh history."
+EMPTY_DIAGNOSTICS_TEXT = "No diagnostics loaded. Click Refresh diagnostics."
 
 
 def configure_logging() -> None:
@@ -124,10 +124,20 @@ def refresh_diagnostics_tab():
     return diagnostics_snapshot(settings)
 
 
-def history_table_value(entries):
-    rows = history_rows(entries)
-    logger.info("History table returning %d rows", len(rows))
-    return rows if rows else EMPTY_HISTORY_ROW
+def refresh_diagnostics_section():
+    health_text, models_text, vllm_tail, gradio_tail = refresh_diagnostics_tab()
+    return "\n\n".join(
+        [
+            "vLLM health",
+            health_text,
+            "Model ids from /v1/models",
+            models_text,
+            "Last 80 lines of data/logs/vllm.log",
+            vllm_tail,
+            "Last 80 lines of data/logs/gradio.log",
+            gradio_tail,
+        ]
+    )
 
 
 def history_text_value(entries):
@@ -186,74 +196,76 @@ def _existing_file(value: object) -> str | None:
 def build_demo() -> gr.Blocks:
     with gr.Blocks(title="Voxtral Mini Audio Journal") as demo:
         gr.Markdown("# Voxtral Mini Personal Audio Journal")
-        with gr.Tab("Transcribe"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    audio = gr.File(
-                        label="Audio journal file",
-                        file_types=[".mp3", ".wav", ".m4a", ".mp4", ".webm", ".aac", ".flac"],
-                        type="filepath",
+        gr.Markdown("## Transcribe")
+        with gr.Row():
+            with gr.Column(scale=1):
+                audio = gr.File(
+                    label="Audio journal file",
+                    file_types=[".mp3", ".wav", ".m4a", ".mp4", ".webm", ".aac", ".flac"],
+                    type="filepath",
+                )
+                with gr.Row():
+                    journal_datetime = gr.Textbox(
+                        label="Journal date/time",
+                        value=current_journal_datetime(),
                     )
-                    with gr.Row():
-                        journal_datetime = gr.Textbox(
-                            label="Journal date/time",
-                            value=current_journal_datetime(),
-                        )
-                        use_current_time = gr.Button("Use current time", variant="secondary")
-                    language = gr.Textbox(label="Language", value=settings.default_language)
-                    mode = gr.Dropdown(
-                        label="Processing mode",
-                        choices=[mode.value for mode in ProcessingMode],
-                        value=ProcessingMode.ALWAYS_CHUNK.value,
+                    use_current_time = gr.Button("Use current time", variant="secondary")
+                language = gr.Textbox(label="Language", value=settings.default_language)
+                mode = gr.Dropdown(
+                    label="Processing mode",
+                    choices=[mode.value for mode in ProcessingMode],
+                    value=ProcessingMode.ALWAYS_CHUNK.value,
+                )
+                with gr.Row():
+                    chunk_length = gr.Number(
+                        label="Chunk length seconds",
+                        value=settings.default_chunk_seconds,
+                        precision=0,
                     )
-                    with gr.Row():
-                        chunk_length = gr.Number(
-                            label="Chunk length seconds",
-                            value=settings.default_chunk_seconds,
-                            precision=0,
-                        )
-                        overlap = gr.Number(
-                            label="Overlap seconds",
-                            value=settings.default_overlap_seconds,
-                            precision=0,
-                        )
-                    run = gr.Button("Transcribe", variant="primary")
-                with gr.Column(scale=2):
-                    final_text = gr.Textbox(
-                        label="Final polished transcript",
-                        lines=26,
-                        max_lines=42,
+                    overlap = gr.Number(
+                        label="Overlap seconds",
+                        value=settings.default_overlap_seconds,
+                        precision=0,
                     )
-                    status = gr.Textbox(label="Status", interactive=False)
-                    with gr.Row():
-                        final_md = gr.File(label="final_journal_transcript.md")
-                        transcript_json = gr.File(label="transcript.json")
-                    with gr.Row():
-                        raw_md = gr.File(label="raw_merged_transcript.md")
-                        chunks_zip = gr.File(label="chunks.zip")
+                run = gr.Button("Transcribe", variant="primary")
+            with gr.Column(scale=2):
+                final_text = gr.Textbox(
+                    label="Final polished transcript",
+                    lines=26,
+                    max_lines=42,
+                )
+                status = gr.Textbox(label="Status", interactive=False)
+                with gr.Row():
+                    final_md = gr.File(label="final_journal_transcript.md")
+                    transcript_json = gr.File(label="transcript.json")
+                with gr.Row():
+                    raw_md = gr.File(label="raw_merged_transcript.md")
+                    chunks_zip = gr.File(label="chunks.zip")
 
-        with gr.Tab("History"):
-            gr.Markdown("Recent completed and failed jobs from `data/history/index.json` and existing transcript artifacts.")
-            history_refresh = gr.Button("Refresh history", variant="secondary")
-            history_table = gr.Textbox(
-                label="History",
-                value=EMPTY_HISTORY_TEXT,
-                lines=12,
-                max_lines=24,
-                interactive=False,
-            )
-            history_job = gr.Dropdown(label="Job downloads", choices=[], interactive=True)
-            with gr.Row():
-                history_final_md = gr.File(label="Selected final markdown")
-                history_json = gr.File(label="Selected transcript JSON")
+        gr.Markdown("## History")
+        gr.Markdown("Recent completed and failed jobs from `data/history/index.json` and existing transcript artifacts.")
+        history_refresh = gr.Button("Refresh history", variant="secondary")
+        history_table = gr.Textbox(
+            label="History",
+            value=EMPTY_HISTORY_TEXT,
+            lines=12,
+            max_lines=24,
+            interactive=False,
+        )
+        history_job = gr.Dropdown(label="Job downloads", choices=[], interactive=True)
+        with gr.Row():
+            history_final_md = gr.File(label="Selected final markdown")
+            history_json = gr.File(label="Selected transcript JSON")
 
-        with gr.Tab("Diagnostics"):
-            gr.Markdown("Local service health and log tails. This does not read transcript contents.")
-            diagnostics_refresh = gr.Button("Refresh diagnostics", variant="secondary")
-            vllm_health = gr.Textbox(label="vLLM health check", interactive=False)
-            vllm_models = gr.Textbox(label="Model ids from /v1/models", lines=3, interactive=False)
-            vllm_log_tail = gr.Textbox(label="Last 80 lines of data/logs/vllm.log", lines=18, interactive=False)
-            gradio_log_tail = gr.Textbox(label="Last 80 lines of data/logs/gradio.log", lines=18, interactive=False)
+        gr.Markdown("## Diagnostics")
+        diagnostics_refresh = gr.Button("Refresh diagnostics", variant="secondary")
+        diagnostics_text = gr.Textbox(
+            label="Diagnostics",
+            value=EMPTY_DIAGNOSTICS_TEXT,
+            lines=24,
+            max_lines=40,
+            interactive=False,
+        )
 
         run.click(
             fn=transcribe_ui,
@@ -272,8 +284,8 @@ def build_demo() -> gr.Blocks:
             outputs=[history_final_md, history_json],
         )
         diagnostics_refresh.click(
-            fn=refresh_diagnostics_tab,
-            outputs=[vllm_health, vllm_models, vllm_log_tail, gradio_log_tail],
+            fn=refresh_diagnostics_section,
+            outputs=diagnostics_text,
         )
     return demo
 
