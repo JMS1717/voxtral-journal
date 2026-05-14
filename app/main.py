@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import gradio as gr
@@ -94,10 +95,11 @@ def transcribe_ui(
         failure_text = "\n".join(f"- {path.name}: {error}" for path, error in failures)
         raise gr.Error(f"All files failed.\n{failure_text}")
 
+    combined_batch = write_combined_batch_markdown(results) if total > 1 else None
     latest_input, latest_artifacts = results[-1]
     final_md, transcript_json, raw_md, chunks_zip = artifact_paths_for_gradio(latest_artifacts)
-    status = _batch_status_text(results, failures, latest_input)
-    return latest_artifacts.final_text, final_md, transcript_json, raw_md, chunks_zip, status
+    status = _batch_status_text(results, failures, latest_input, combined_batch)
+    return latest_artifacts.final_text, final_md, transcript_json, raw_md, chunks_zip, combined_batch, status
 
 
 def _audio_file_paths(audio_files: str | list[str]) -> list[Path]:
@@ -108,19 +110,46 @@ def _audio_file_paths(audio_files: str | list[str]) -> list[Path]:
     return [Path(path) for path in audio_files if path]
 
 
-def _batch_status_text(results: list[tuple[Path, object]], failures: list[tuple[Path, str]], latest_input: Path) -> str:
+def _batch_status_text(
+    results: list[tuple[Path, object]],
+    failures: list[tuple[Path, str]],
+    latest_input: Path,
+    combined_batch: str | None = None,
+) -> str:
     total = len(results) + len(failures)
     lines = [
         f"Batch complete: {len(results)} succeeded, {len(failures)} failed, {total} total.",
         f"Download widgets show latest successful job: {latest_input.name}",
         "",
     ]
+    if combined_batch:
+        lines.extend([f"Combined batch file: {combined_batch}", ""])
     for index, (path, artifacts) in enumerate(results, start=1):
         session_id = getattr(artifacts, "session_id", "")
         lines.append(f"{index}. completed: {path.name} -> {session_id}")
     for path, error in failures:
         lines.append(f"- failed: {path.name} -> {error}")
     return "\n".join(lines)
+
+
+def write_combined_batch_markdown(results: list[tuple[Path, object]]) -> str | None:
+    if len(results) < 2:
+        return None
+    batch_id = datetime.now().strftime("batch_%Y%m%d_%H%M%S")
+    batch_dir = settings.final_transcripts_dir / batch_id
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    output_path = batch_dir / "combined_batch_transcript.md"
+    sections = ["# Combined Batch Transcript"]
+    for index, (input_path, artifacts) in enumerate(results, start=1):
+        final_text = str(getattr(artifacts, "final_text", "")).strip()
+        session_id = getattr(artifacts, "session_id", "")
+        sections.append(f"## {index}. {input_path.name}")
+        if session_id:
+            sections.append(f"Session: `{session_id}`")
+        sections.append(final_text or "_No transcript text returned._")
+    output_path.write_text("\n\n".join(sections).strip() + "\n", encoding="utf-8")
+    logger.info("Wrote combined batch transcript: %s", output_path)
+    return str(output_path)
 
 
 def refresh_history_tab():
@@ -242,18 +271,29 @@ def _history_cell_text(value: object) -> str:
 def _history_artifact_file(entry: dict, key: str, filename: str) -> str | None:
     job_id = entry.get("job_id")
     if job_id:
-        runtime_path = settings.final_transcripts_dir / str(job_id) / filename
-        logger.info(
-            "History artifact runtime candidate: job_id=%s key=%s path=%s exists=%s",
-            job_id,
-            key,
-            runtime_path,
-            runtime_path.exists(),
-        )
-        if runtime_path.exists():
-            return str(runtime_path)
+        for candidate_name in _history_candidate_filenames(entry, key, filename):
+            runtime_path = settings.final_transcripts_dir / str(job_id) / candidate_name
+            logger.info(
+                "History artifact runtime candidate: job_id=%s key=%s path=%s exists=%s",
+                job_id,
+                key,
+                runtime_path,
+                runtime_path.exists(),
+            )
+            if runtime_path.exists():
+                return str(runtime_path)
     logger.info("History artifact falling back to stored path: key=%s value=%s", key, entry.get(key))
     return _existing_file(entry.get(key))
+
+
+def _history_candidate_filenames(entry: dict, key: str, fallback_filename: str) -> list[str]:
+    names: list[str] = []
+    stored_value = entry.get(key)
+    if stored_value:
+        names.append(Path(str(stored_value)).name)
+    if fallback_filename not in names:
+        names.append(fallback_filename)
+    return names
 
 
 def _existing_file(value: object) -> str | None:
@@ -323,6 +363,7 @@ def build_demo() -> gr.Blocks:
                 with gr.Row():
                     raw_md = gr.File(label="raw_merged_transcript.md")
                     chunks_zip = gr.File(label="chunks.zip")
+                batch_combined_md = gr.File(label="combined_batch_transcript.md")
 
         gr.Markdown("## History")
         gr.Markdown("Recent completed and failed jobs from `data/history/index.json` and existing transcript artifacts.")
@@ -359,7 +400,7 @@ def build_demo() -> gr.Blocks:
         run.click(
             fn=transcribe_ui,
             inputs=[audio, journal_datetime, language, mode, chunk_length, overlap],
-            outputs=[final_text, final_md, transcript_json, raw_md, chunks_zip, status],
+            outputs=[final_text, final_md, transcript_json, raw_md, chunks_zip, batch_combined_md, status],
         )
         use_current_time.click(fn=current_journal_datetime, outputs=journal_datetime)
         demo.load(fn=current_journal_datetime, outputs=journal_datetime)

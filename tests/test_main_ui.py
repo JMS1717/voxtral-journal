@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.main import (
     build_demo,
     current_journal_datetime,
@@ -7,6 +9,7 @@ from app.main import (
     refresh_history_tab,
     settings,
     transcribe_ui,
+    write_combined_batch_markdown,
 )
 
 
@@ -137,6 +140,7 @@ def test_history_downloads_prefers_runtime_artifact_paths(monkeypatch, tmp_path)
 
 
 def test_transcribe_ui_processes_multiple_files_sequentially(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "final_transcripts_dir", tmp_path)
     first = tmp_path / "first.mp3"
     second = tmp_path / "second.mp3"
     first.write_text("a", encoding="utf-8")
@@ -162,7 +166,7 @@ def test_transcribe_ui_processes_multiple_files_sequentially(monkeypatch, tmp_pa
 
     monkeypatch.setattr("app.main.JournalTranscriber", FakeTranscriber)
 
-    final_text, final_md, transcript_json, raw_md, chunks_zip, status = transcribe_ui(
+    final_text, final_md, transcript_json, raw_md, chunks_zip, combined_md, status = transcribe_ui(
         [str(first), str(second)],
         "2026-05-13 20:00",
         "en",
@@ -178,4 +182,33 @@ def test_transcribe_ui_processes_multiple_files_sequentially(monkeypatch, tmp_pa
     assert transcript_json.endswith("session-2.json")
     assert raw_md.endswith("session-2-raw.md")
     assert chunks_zip is None
+    assert combined_md is not None
+    assert combined_md.endswith("combined_batch_transcript.md")
+    assert Path(combined_md).read_text(encoding="utf-8").count("## ") == 2
     assert "2 succeeded, 0 failed, 2 total" in status
+    assert "Combined batch file:" in status
+
+
+def test_write_combined_batch_markdown_uses_source_filenames(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "final_transcripts_dir", tmp_path)
+    first = tmp_path / "first.mp3"
+    second = tmp_path / "second.mp3"
+
+    class FakeArtifacts:
+        def __init__(self, session_id: str, final_text: str) -> None:
+            self.session_id = session_id
+            self.final_text = final_text
+
+    output = write_combined_batch_markdown(
+        [
+            (first, FakeArtifacts("session-1", "first transcript")),
+            (second, FakeArtifacts("session-2", "second transcript")),
+        ]
+    )
+
+    assert output is not None
+    text = Path(output).read_text(encoding="utf-8")
+    assert "## 1. first.mp3" in text
+    assert "first transcript" in text
+    assert "## 2. second.mp3" in text
+    assert "second transcript" in text

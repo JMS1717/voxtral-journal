@@ -53,10 +53,11 @@ class OutputWriter:
         chunk_audio_files = chunk_audio_files or []
         chunk_transcripts = chunk_transcripts or []
 
-        final_markdown = session_dir / "final_journal_transcript.md"
-        raw_merged_markdown = session_dir / "raw_merged_transcript.md"
-        transcript_json = session_dir / "transcript.json"
-        chunks_zip = session_dir / "chunks.zip" if chunk_audio_files or chunk_transcripts else None
+        output_stem = _output_stem(metadata)
+        final_markdown = session_dir / f"{output_stem}.md"
+        raw_merged_markdown = session_dir / f"{output_stem}_raw.md"
+        transcript_json = session_dir / f"{output_stem}.json"
+        chunks_zip = session_dir / f"{output_stem}_chunks.zip" if chunk_audio_files or chunk_transcripts else None
 
         final_markdown.write_text(final_text.strip() + "\n", encoding="utf-8")
         raw_merged_markdown.write_text(raw_merged_text.strip() + "\n", encoding="utf-8")
@@ -123,6 +124,12 @@ def artifact_paths_for_gradio(artifacts: TranscriptArtifacts) -> tuple[str, str,
         str(artifacts.raw_merged_markdown),
         str(artifacts.chunks_zip) if artifacts.chunks_zip else None,
     )
+
+
+def _output_stem(metadata: dict[str, Any]) -> str:
+    source_name = Path(str(metadata.get("source_file") or metadata.get("uploaded_file") or "transcript")).stem
+    safe_name = "".join("_" if ch in '<>:"/\\|?*' or ord(ch) < 32 else ch for ch in source_name)
+    return safe_name.strip(" ._") or "transcript"
 
 
 def _chunk_statuses(chunk_audio_files: list[Path], chunk_transcripts: list[Path]) -> list[dict[str, Any]]:
