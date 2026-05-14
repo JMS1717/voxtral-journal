@@ -3,6 +3,7 @@ from app.main import (
     build_demo,
     history_downloads_for_job,
     history_table_value,
+    history_text_value,
     refresh_history_tab,
     settings,
 )
@@ -17,6 +18,23 @@ def test_history_table_value_keeps_empty_dataframe_shape():
     assert history_table_value([]) == EMPTY_HISTORY_ROW
 
 
+def test_history_text_value_formats_rows():
+    text = history_text_value(
+        [
+            {
+                "job_id": "job-1",
+                "created_at": "2026-05-13T19:00:00",
+                "source_filename": "entry.m4a",
+                "status": "completed",
+            }
+        ]
+    )
+
+    assert "created_at | source filename" in text
+    assert "2026-05-13T19:00:00 | entry.m4a" in text
+    assert "job-1" in text
+
+
 def test_refresh_history_tab_handles_load_failure(monkeypatch):
     def fail_load(*args, **kwargs):
         raise RuntimeError("bad history")
@@ -25,7 +43,7 @@ def test_refresh_history_tab_handles_load_failure(monkeypatch):
 
     rows, dropdown_update, final_path, json_path = refresh_history_tab()
 
-    assert rows == EMPTY_HISTORY_ROW
+    assert rows == "No history entries found."
     assert dropdown_update["choices"] == []
     assert dropdown_update["value"] is None
     assert final_path is None
@@ -38,9 +56,9 @@ def test_refresh_history_tab_does_not_auto_download_first_job(monkeypatch):
         lambda *args, **kwargs: [{"job_id": "job-1", "created_at": "2026-05-13T19:00:00"}],
     )
 
-    rows, dropdown_update, final_path, json_path = refresh_history_tab()
+    text, dropdown_update, final_path, json_path = refresh_history_tab()
 
-    assert rows[0][-1] == "job-1"
+    assert "job-1" in text
     assert dropdown_update["choices"] == ["job-1"]
     assert dropdown_update["value"] is None
     assert final_path is None

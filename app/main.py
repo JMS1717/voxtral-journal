@@ -28,6 +28,7 @@ HISTORY_HEADERS = [
     "job_id",
 ]
 EMPTY_HISTORY_ROW = [["", "", None, "", "", "", "", ""]]
+EMPTY_HISTORY_TEXT = "No history loaded. Click Refresh history."
 
 
 def configure_logging() -> None:
@@ -90,7 +91,7 @@ def refresh_history_tab():
     job_ids = [entry["job_id"] for entry in entries if entry.get("job_id")]
     logger.info("History refresh loaded %d entries with %d downloadable job ids", len(entries), len(job_ids))
     return (
-        history_table_value(entries),
+        history_text_value(entries),
         gr.update(choices=job_ids, value=None),
         None,
         None,
@@ -127,6 +128,24 @@ def history_table_value(entries):
     rows = history_rows(entries)
     logger.info("History table returning %d rows", len(rows))
     return rows if rows else EMPTY_HISTORY_ROW
+
+
+def history_text_value(entries):
+    rows = history_rows(entries)
+    logger.info("History text returning %d rows", len(rows))
+    if not rows:
+        return "No history entries found."
+    lines = [" | ".join(HISTORY_HEADERS)]
+    lines.append(" | ".join("-" * len(header) for header in HISTORY_HEADERS))
+    for row in rows:
+        lines.append(" | ".join(_history_cell_text(value) for value in row))
+    return "\n".join(lines)
+
+
+def _history_cell_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).replace("\n", " ").replace("\r", " ")
 
 
 def _history_artifact_file(entry: dict, key: str, filename: str) -> str | None:
@@ -213,16 +232,15 @@ def build_demo() -> gr.Blocks:
                         raw_md = gr.File(label="raw_merged_transcript.md")
                         chunks_zip = gr.File(label="chunks.zip")
 
-        with gr.Tab("History") as history_tab:
+        with gr.Tab("History"):
             gr.Markdown("Recent completed and failed jobs from `data/history/index.json` and existing transcript artifacts.")
             history_refresh = gr.Button("Refresh history", variant="secondary")
-            history_table = gr.Dataframe(
-                headers=HISTORY_HEADERS,
-                value=EMPTY_HISTORY_ROW,
-                datatype=["str", "str", "number", "str", "str", "str", "str", "str"],
-                col_count=(len(HISTORY_HEADERS), "fixed"),
+            history_table = gr.Textbox(
+                label="History",
+                value=EMPTY_HISTORY_TEXT,
+                lines=12,
+                max_lines=24,
                 interactive=False,
-                wrap=True,
             )
             history_job = gr.Dropdown(label="Job downloads", choices=[], interactive=True)
             with gr.Row():
@@ -244,10 +262,6 @@ def build_demo() -> gr.Blocks:
         )
         use_current_time.click(fn=current_journal_datetime, outputs=journal_datetime)
         demo.load(fn=current_journal_datetime, outputs=journal_datetime)
-        history_tab.select(
-            fn=refresh_history_tab,
-            outputs=[history_table, history_job, history_final_md, history_json],
-        )
         history_refresh.click(
             fn=refresh_history_tab,
             outputs=[history_table, history_job, history_final_md, history_json],
