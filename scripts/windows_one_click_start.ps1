@@ -294,7 +294,7 @@ try {
         -PassThru
     Write-Status "vLLM launcher process started. Windows PID: $($vllmProcess.Id)"
 
-    if (-not (Wait-HttpOk -Name "vLLM" -Url "http://localhost:8000/v1/models" -TimeoutSeconds 180 -StatusEverySeconds 25)) {
+    if (-not (Wait-HttpOk -Name "vLLM" -Url "http://localhost:8000/v1/models" -TimeoutSeconds 1800 -StatusEverySeconds 25)) {
         $tail = Get-WslTail -WslRepo $wslRepo -LogPath "data/logs/vllm.log" -Lines 120
         Add-LogBlock "vLLM failed to become ready. Tail of runtime data/logs/vllm.log:" $tail
         $memoryFailureMessage = Get-VllmMemoryFailureMessage -Lines $tail
@@ -311,7 +311,7 @@ try {
         -PassThru
     Write-Status "Gradio launcher process started. Windows PID: $($uiProcess.Id)"
 
-    if (-not (Wait-HttpOk -Name "Gradio UI" -Url "http://localhost:7860" -TimeoutSeconds 240 -StatusEverySeconds 20)) {
+    if (-not (Wait-HttpOk -Name "Gradio UI" -Url "http://localhost:7860" -TimeoutSeconds 1800 -StatusEverySeconds 20)) {
         $tail = Get-WslTail -WslRepo $wslRepo -LogPath "data/logs/gradio.log" -Lines 120
         Add-LogBlock "Gradio failed to become ready. Tail of runtime data/logs/gradio.log:" $tail
         throw "Gradio did not become ready. Check the runtime venv, app startup errors, and $wslRepo/data/logs/gradio.log."
