@@ -2,6 +2,18 @@
 
 Local Windows 11 + WSL2 Ubuntu project for batch transcribing personal audio journals with `mistralai/Voxtral-Mini-3B-2507`.
 
+# What is it?
+
+I’ve been using audio journaling for a while, and one of the best parts is being able to talk naturally instead of forcing myself to sit down and write.
+
+I used to use Gemini for transcribing and summarizing my audio journals, and honestly, it worked pretty well. But the more I used it, the more uncomfortable I got with the privacy side of it.
+
+These are personal journals. They can include thoughts, stress, relationships, work stuff, health stuff, and things I’m still processing. Even if a cloud provider has good policies, I just didn’t love the idea that my most private reflections had to leave my machine to become useful.
+
+So I made Voxtral Journal Windows.
+
+It works locally, without needing a cloud transcription API, and the core workflow keeps everything on your computer.
+
 This project is intentionally local-first:
 
 - vLLM runs in WSL2 Ubuntu.
