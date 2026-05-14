@@ -2,8 +2,6 @@
 
 Local Windows 11 + WSL2 Ubuntu project for batch transcribing personal audio journals with `mistralai/Voxtral-Mini-3B-2507`.
 
-This project is source-available for non-commercial use only under CC BY-NC 4.0. It is not OSI open source.
-
 This project is intentionally local-first:
 
 - vLLM runs in WSL2 Ubuntu.
