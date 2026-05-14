@@ -15,6 +15,8 @@ from app.token_budget import CleanupContextError
 from app.transcriber import JournalTranscriber, ProcessingMode
 
 
+logger = logging.getLogger(__name__)
+
 HISTORY_HEADERS = [
     "created_at",
     "source filename",
@@ -75,36 +77,45 @@ def transcribe_ui(
 
 
 def refresh_history_tab():
+    logger.info(
+        "History refresh requested: data_dir=%s final_transcripts_dir=%s",
+        settings.data_dir,
+        settings.final_transcripts_dir,
+    )
     try:
         entries = load_history_entries(settings.data_dir, settings.final_transcripts_dir, limit=50)
     except Exception:
-        logging.exception("Failed to load history")
+        logger.exception("Failed to load history")
         entries = []
     job_ids = [entry["job_id"] for entry in entries if entry.get("job_id")]
-    selected_job_id = job_ids[0] if job_ids else None
-    final_path, json_path = history_downloads_for_job(selected_job_id)
+    logger.info("History refresh loaded %d entries with %d downloadable job ids", len(entries), len(job_ids))
     return (
         history_table_value(entries),
-        gr.update(choices=job_ids, value=selected_job_id),
-        final_path,
-        json_path,
+        gr.update(choices=job_ids, value=None),
+        None,
+        None,
     )
 
 
 def history_downloads_for_job(job_id: str | None):
+    logger.info("History download selection changed: job_id=%s", job_id)
     if not job_id:
+        logger.info("History download selection cleared")
         return None, None
     try:
         entries = load_history_entries(settings.data_dir, settings.final_transcripts_dir, limit=None)
     except Exception:
-        logging.exception("Failed to load history downloads")
+        logger.exception("Failed to load history downloads")
         return None, None
     for entry in entries:
         if entry.get("job_id") == job_id:
-            return (
+            paths = (
                 _history_artifact_file(entry, "final_markdown_path", "final_journal_transcript.md"),
                 _history_artifact_file(entry, "json_path", "transcript.json"),
             )
+            logger.info("History download paths for %s: final=%s json=%s", job_id, paths[0], paths[1])
+            return paths
+    logger.warning("History job id not found for download: %s", job_id)
     return None, None
 
 
@@ -114,6 +125,7 @@ def refresh_diagnostics_tab():
 
 def history_table_value(entries):
     rows = history_rows(entries)
+    logger.info("History table returning %d rows", len(rows))
     return rows if rows else EMPTY_HISTORY_ROW
 
 
@@ -121,8 +133,16 @@ def _history_artifact_file(entry: dict, key: str, filename: str) -> str | None:
     job_id = entry.get("job_id")
     if job_id:
         runtime_path = settings.final_transcripts_dir / str(job_id) / filename
+        logger.info(
+            "History artifact runtime candidate: job_id=%s key=%s path=%s exists=%s",
+            job_id,
+            key,
+            runtime_path,
+            runtime_path.exists(),
+        )
         if runtime_path.exists():
             return str(runtime_path)
+    logger.info("History artifact falling back to stored path: key=%s value=%s", key, entry.get(key))
     return _existing_file(entry.get(key))
 
 
@@ -131,6 +151,7 @@ def _existing_file(value: object) -> str | None:
         return None
     path = Path(str(value))
     if not path.exists():
+        logger.info("History file does not exist: %s", path)
         return None
     try:
         resolved = path.resolve()
@@ -139,7 +160,7 @@ def _existing_file(value: object) -> str | None:
     allowed_roots = [settings.project_root.resolve(), Path(tempfile.gettempdir()).resolve()]
     if any(resolved.is_relative_to(root) for root in allowed_roots):
         return str(resolved)
-    logging.warning("Ignoring history file outside Gradio allowed paths: %s", resolved)
+    logger.warning("Ignoring history file outside Gradio allowed paths: %s", resolved)
     return None
 
 

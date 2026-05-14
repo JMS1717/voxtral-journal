@@ -32,6 +32,21 @@ def test_refresh_history_tab_handles_load_failure(monkeypatch):
     assert json_path is None
 
 
+def test_refresh_history_tab_does_not_auto_download_first_job(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.load_history_entries",
+        lambda *args, **kwargs: [{"job_id": "job-1", "created_at": "2026-05-13T19:00:00"}],
+    )
+
+    rows, dropdown_update, final_path, json_path = refresh_history_tab()
+
+    assert rows[0][-1] == "job-1"
+    assert dropdown_update["choices"] == ["job-1"]
+    assert dropdown_update["value"] is None
+    assert final_path is None
+    assert json_path is None
+
+
 def test_history_downloads_handles_load_failure(monkeypatch):
     def fail_load(*args, **kwargs):
         raise RuntimeError("bad history")
